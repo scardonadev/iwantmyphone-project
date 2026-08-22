@@ -1,26 +1,115 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/**
+ * Sistema visual: editorial monocromo con un único acento azul.
+ * Referentes: Alpine (retícula, fichas grises, tipografía fina en versales
+ * espaciadas) y Sober (detalle centrado, carrusel a sangre).
+ */
+@theme {
+  --color-paper: #ffffff;
+  --color-ink: #111111;
+  --color-ink-soft: #4a4a4a;
+  --color-muted: #8f8f8f;
+  --color-line: #e8e8e8;
+  --color-surface: #f3f3f3;
+  --color-surface-2: #e9e9e9;
+  --color-accent: #2f5bff;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  font-weight: 300;
+  letter-spacing: 0.01em;
+}
+
+/* Versales espaciadas: navegación, etiquetas de filtro, botones. */
+.u-label {
+  font-size: 0.6875rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 400;
+}
+
+.u-wordmark {
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  font-weight: 400;
+}
+
+/* Los carruseles llevan su propio overflow: la página nunca scrollea en X. */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Selects nativos sin cromo del sistema; el caret lo dibuja el componente. */
+.u-select {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--color-line);
+  padding: 0.4rem 1.5rem 0.4rem 0;
+  width: 100%;
+  color: var(--color-ink);
+  cursor: pointer;
+}
+.u-select:focus-visible {
+  outline: none;
+  border-bottom-color: var(--color-ink);
+}
+
+/**
+ * Campo de formulario del backoffice: filete de 1px y nada más, igual que el
+ * resto del sistema. Bloqueado (`readonly` en los inputs, `disabled` en los
+ * `select`, que no admiten readonly) se apaga sobre `surface` para que el paso
+ * de confirmación se distinga a simple vista del paso editable.
+ */
+.u-input {
+  width: 100%;
+  border: 1px solid var(--color-line);
+  background: var(--color-paper);
+  padding: 0.4rem 0.55rem;
+  font-size: 0.8125rem;
+  color: var(--color-ink);
+}
+.u-input:hover:not(:read-only, :disabled) {
+  border-color: var(--color-muted);
+}
+.u-input:focus-visible {
+  border-color: var(--color-ink);
+}
+.u-input:read-only,
+.u-input:disabled {
+  background: var(--color-surface);
+  color: var(--color-ink-soft);
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
