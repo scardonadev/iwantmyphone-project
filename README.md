@@ -1,36 +1,99 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# iwantmyphone
 
-## Getting Started
+Catálogo de celulares con API REST, sitio público y panel de administración, en una sola
+aplicación **Next.js 16** (App Router) sobre **PostgreSQL**.
 
-First, run the development server:
+## Requisitos
+
+- Node.js 20 o superior
+- Una base de datos PostgreSQL (local o remota)
+
+## Despliegue en local
+
+### 1. Clonar el repositorio e instalar dependencias
+
+```bash
+git clone <url-del-repositorio>
+cd iwantmyphone-project
+npm i
+```
+
+### 2. Crear la base de datos PostgreSQL
+
+Sirve una instancia local o una remota (Neon, Supabase, Railway…). Basta con una base vacía;
+el esquema y los datos los crea la semilla en el paso 4.
+
+```bash
+# Ejemplo local
+createdb iwantmyphone
+```
+
+### 3. Configurar las variables de entorno
+
+Copiar el archivo de ejemplo y completar los valores:
+
+```bash
+cp .env.example .env
+```
+
+```bash
+# Cadena de conexión de tu base de datos
+DATABASE_URL=postgresql://usuario:contraseña@host:5432/iwantmyphone
+# true si el proveedor remoto exige SSL (Neon, Supabase, etc.)
+DATABASE_SSL=false
+# Firma de los JWT de sesión del backoffice (HS256). Mínimo 32 caracteres.
+JWT_SECRET=...
+```
+
+Para generar un `JWT_SECRET`:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+```
+
+Sin `JWT_SECRET` la aplicación arranca, pero el login responde 500.
+
+### 4. Ejecutar la semilla en la base de datos
+
+Por ahora se ejecuta **a mano**. El archivo `src/seed/seed.sql` crea el esquema completo
+(marcas, celulares, especificaciones, comentarios y usuarios) y lo llena con los datos de
+ejemplo:
+
+```bash
+psql "$DATABASE_URL" -f src/seed/seed.sql
+```
+
+En Windows con PowerShell:
+
+```powershell
+psql $env:DATABASE_URL -f src/seed/seed.sql
+```
+
+También puede pegarse el contenido de `src/seed/seed.sql` en cualquier cliente SQL
+(pgAdmin, DBeaver, el editor del proveedor remoto). El script es relanzable: solo crea y
+siembra las tablas que no existan.
+
+### 5. Levantar la aplicación
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- Catálogo público: <http://localhost:3000>
+- Backoffice: <http://localhost:3000/dashboard>
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Acceso al backoffice
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+La semilla crea un usuario de desarrollo ya activo:
 
-## Learn More
+| Campo | Valor |
+| --- | --- |
+| Documento | `1234567890` |
+| Contraseña | `Admin1234` |
 
-To learn more about Next.js, take a look at the following resources:
+Cambiar la contraseña o eliminar ese usuario en cualquier entorno que no sea local.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Documentación
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+La especificación completa del proyecto —contrato de la API, esquema de la base de datos,
+sistema visual y decisiones de diseño— está en [`AGENTS.md`](AGENTS.md).
