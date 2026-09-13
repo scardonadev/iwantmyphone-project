@@ -1,7 +1,12 @@
-import { query, queryOne } from "@lib/db";
+import { clausulaSet, query, queryOne } from "@lib/db";
 import { escapeLike, type FiltroEntry } from "@utils/parse-filter";
 import { buildMeta, type Pagination } from "@utils/pagination";
-import type { Celular, CelularDetalle, PaginationMeta } from "@/src/types/api";
+import type {
+  Celular,
+  CelularDetalle,
+  CelularEntrada,
+  PaginationMeta,
+} from "@/src/types/api";
 
 interface CelularRow {
   id: string;
@@ -168,4 +173,70 @@ export async function obtenerSugeridos(
   );
 
   return rows.map(mapCelular);
+}
+
+/**
+ * Entrada de la API → columnas. `images_url` (array) vuelve a ser el CSV de
+ * `images_urls`, y un array vacío se guarda como NULL, igual que en el seed.
+ * Mapeo fijo: ninguna clave sale del cuerpo de la petición.
+ */
+function columnasDeCelular(entrada: Partial<CelularEntrada>): Record<string, unknown> {
+  const columnas: Record<string, unknown> = {};
+  if (entrada.marca_id !== undefined) columnas.marca_id = entrada.marca_id;
+  if (entrada.modelo !== undefined) columnas.modelo = entrada.modelo;
+  if (entrada.precio !== undefined) columnas.precio = entrada.precio;
+  if (entrada.fecha_lanzamiento !== undefined) {
+    columnas.fecha_lanzamiento = entrada.fecha_lanzamiento;
+  }
+  if (entrada.images_url !== undefined) {
+    columnas.images_urls = entrada.images_url.length > 0 ? entrada.images_url.join(",") : null;
+  }
+  return columnas;
+}
+
+/**
+ * Alta de celular. Devuelve el mismo shape que `GET /api/celulares/[id]`
+ * (recién creado: sin ficha y con valoración 0). Una `marca_id` que no existe
+ * sale como 23503 (`fk_celulares_marcas`).
+ */
+export async function crearCelular(entrada: CelularEntrada): Promise<CelularDetalle> {
+  const columnas = columnasDeCelular(entrada);
+  const row = await queryOne<{ id: string }>(
+    `INSERT INTO celulares (marca_id, modelo, precio, fecha_lanzamiento, images_urls)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id`,
+    [
+      columnas.marca_id,
+      columnas.modelo,
+      columnas.precio,
+      columnas.fecha_lanzamiento,
+      columnas.images_urls,
+    ],
+  );
+
+  const celular = row ? await obtenerCelular(row.id) : null;
+  if (!celular) throw new Error("INSERT INTO celulares no devolvió la fila");
+  return celular;
+}
+
+/** PATCH: solo las columnas que vienen. `null` si el celular no existe. */
+export async function actualizarCelular(
+  id: string,
+  cambios: Partial<CelularEntrada>,
+): Promise<CelularDetalle | null> {
+  const { sql, valores } = clausulaSet(columnasDeCelular(cambios), 2);
+  const row = await queryOne<{ id: string }>(
+    `UPDATE celulares SET ${sql} WHERE id = $1 RETURNING id`,
+    [id, ...valores],
+  );
+  return row ? obtenerCelular(row.id) : null;
+}
+
+/** `false` si no existía. Su ficha y sus comentarios caen con él (ON DELETE CASCADE, §3). */
+export async function eliminarCelular(id: string): Promise<boolean> {
+  const row = await queryOne<{ id: string }>(
+    "DELETE FROM celulares WHERE id = $1 RETURNING id",
+    [id],
+  );
+  return row !== null;
 }

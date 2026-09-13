@@ -1,6 +1,8 @@
 import type { NextRequest } from "next/server";
-import { handle, ok } from "@lib/http";
-import { listarCelulares } from "@lib/queries/celulares";
+import { requireSesion } from "@lib/auth/session";
+import { badRequest, conRestricciones, created, handle, ok, readJsonObject } from "@lib/http";
+import { crearCelular, listarCelulares } from "@lib/queries/celulares";
+import { leerAltaCelular } from "@utils/entradas";
 import { parseFilter } from "@utils/parse-filter";
 import { readPagination } from "@utils/pagination";
 
@@ -13,5 +15,24 @@ export async function GET(request: NextRequest) {
 
     const { data, meta } = await listarCelulares({ filtros, pagination });
     return ok(data, meta);
+  });
+}
+
+/**
+ * POST /api/celulares  { marca_id, modelo, precio, fecha_lanzamiento, images_url? }
+ *
+ * Requiere sesión de un usuario activo. Responde con el mismo shape que
+ * `GET /api/celulares/[id]`.
+ */
+export async function POST(request: NextRequest) {
+  return handle(async () => {
+    await requireSesion();
+    const entrada = leerAltaCelular(await readJsonObject(request));
+
+    const celular = await conRestricciones(() => crearCelular(entrada), {
+      fk_celulares_marcas: () =>
+        badRequest("Datos de celular no válidos", { campos: { marca_id: "Marca: no existe." } }),
+    });
+    return created(celular);
   });
 }

@@ -58,3 +58,27 @@ export async function queryOne<T extends QueryResultRow>(
   const rows = await query<T>(text, params);
   return rows[0] ?? null;
 }
+
+const COLUMNA_RE = /^[a-z_]+$/;
+
+/**
+ * `col_a = $n, col_b = $n+1, …` para un UPDATE parcial (PATCH).
+ *
+ * Las claves de `columnas` las escribe cada query con un mapeo fijo; nunca se
+ * copian del cuerpo de la petición. El patrón es una segunda red por si alguien
+ * lo olvida. Los valores viajan siempre como parámetros.
+ */
+export function clausulaSet(
+  columnas: Record<string, unknown>,
+  primerIndice: number,
+): { sql: string; valores: unknown[] } {
+  const entradas = Object.entries(columnas);
+  if (entradas.length === 0) throw new Error("clausulaSet: UPDATE sin columnas");
+  for (const [nombre] of entradas) {
+    if (!COLUMNA_RE.test(nombre)) throw new Error(`clausulaSet: columna no válida (${nombre})`);
+  }
+  return {
+    sql: entradas.map(([nombre], i) => `${nombre} = $${primerIndice + i}`).join(", "),
+    valores: entradas.map(([, valor]) => valor),
+  };
+}
