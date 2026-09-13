@@ -1,0 +1,64 @@
+Table "marcas" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "nombre" VARCHAR(100) [unique, not null]
+  "logo_url" VARCHAR(2048)
+  "pais_origen" VARCHAR(100) [not null]
+  "created_at" TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table "celulares" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "marca_id" UUID [not null]
+  "images_urls" TEXT // CSV de URLs de imagen; admite NULL
+  "modelo" VARCHAR(150) [not null]
+  "precio" DECIMAL(10,2) [not null]
+  "fecha_lanzamiento" DATE [not null]
+  "created_at" TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table "especificaciones" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "celular_id" UUID [unique, not null] // 1 a 1 limpio: la FK vive aquí
+  "procesador" VARCHAR(100) [not null]
+  "ram" VARCHAR(50) [not null]
+  "almacenamiento" VARCHAR(50) [not null]
+  "pantalla" VARCHAR(100) [not null]
+  "camara" VARCHAR(150) [not null]
+  "bateria" VARCHAR(50) [not null]
+  "sistema_op" VARCHAR(100) [not null]
+  "created_at" TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+Table "comentarios" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "celular_id" UUID [not null]
+  "nombre" VARCHAR(100) [not null]
+  "mensaje" TEXT [not null]
+  "calificacion" SMALLINT [not null, check: `calificacion BETWEEN 1 AND 5`]
+  "fecha" TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+// INICIO DE SESIÓN DEL BACKOFFICE
+//
+// Tabla aislada: no se relaciona con el catálogo. El login es documento +
+// contraseña, y la sesión es un JWT sin estado (HS256, firmado con JWT_SECRET)
+// que solo lleva el `id` del usuario en `sub`: no hay tabla de sesiones.
+// Sin roles: todo usuario activo tiene acceso completo al panel.
+Table "usuarios" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "documento" VARCHAR(20) [unique, not null, check: `documento ~ '^[0-9]{6,20}$'`] // documento de identidad: es el usuario del login
+  "nombre" VARCHAR(100) [not null]
+  "password_hash" VARCHAR(255) [not null] // scrypt:N:r:p:sal:hash, nunca la contraseña en claro
+  "is_active" BOOLEAN [not null, default: false] // se activa a mano en la BD; un usuario inactivo no inicia sesión
+  "created_at" TIMESTAMP [default: `CURRENT_TIMESTAMP`]
+}
+
+// RELACIONES
+
+Ref "fk_celulares_marcas":"marcas"."id" < "celulares"."marca_id" [update: cascade, delete: restrict]
+
+// Uno a uno: las especificaciones son opcionales para el celular (puede no
+// existir la fila), y el UNIQUE de celular_id impide que dos modelos compartan ficha.
+Ref "fk_especificaciones_celulares":"celulares"."id" - "especificaciones"."celular_id" [update: cascade, delete: cascade]
+
+Ref "fk_comentarios_celulares":"celulares"."id" < "comentarios"."celular_id" [update: cascade, delete: cascade]

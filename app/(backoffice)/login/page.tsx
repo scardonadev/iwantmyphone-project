@@ -9,8 +9,19 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
+/**
+ * A dónde volver tras el login. `proxy.ts` manda aquí con `?next=<ruta>`, y
+ * solo se acepta si es una ruta del propio panel: así el parámetro no sirve
+ * de redirección abierta (`?next=https://…` o `?next=//otro-sitio`).
+ */
+function destinoSeguro(next: string | string[] | undefined): string {
+  return typeof next === "string" && /^\/dashboard(?:[/?#]|$)/.test(next) ? next : "/dashboard";
+}
+
 /** Formulario centrado, sin cabecera ni pie: la pantalla no tiene nada que navegar. */
-export default function LoginPage() {
+export default async function LoginPage({ searchParams }: PageProps<"/login">) {
+  const { next } = await searchParams;
+
   return (
     <div className="flex flex-1 items-center justify-center px-5 py-20 sm:px-8">
       <div className="w-full max-w-sm">
@@ -30,11 +41,11 @@ export default function LoginPage() {
           </p>
         </div>
 
-        <LoginForm />
+        <LoginForm destino={destinoSeguro(next)} />
 
         <p className="mt-10 border-t border-line pt-6 text-center text-xs leading-relaxed text-muted">
-          El acceso todavía no valida credenciales contra el servidor: Inicia
-          sesión con cualquier documento y cualquier contraseña.
+          Las cuentas nuevas se crean desactivadas. Si no puedes entrar, pide
+          que activen tu usuario.
         </p>
       </div>
     </div>

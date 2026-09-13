@@ -9,8 +9,10 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
+import { sesionApi } from "@lib/backoffice/api";
+import type { Usuario } from "@/src/types/api";
 import { ENTIDADES } from "./nav";
 
 /**
@@ -21,15 +23,40 @@ import { ENTIDADES } from "./nav";
  * el cajón al pulsarlo —sin eso, navegar desde el menú deja el panel tapado por
  * el propio menú—; se hace en el `onClick` y no en un efecto sobre `pathname`
  * porque es exactamente lo que es: la consecuencia de un gesto del usuario.
+ *
+ * El pie muestra quién tiene la sesión abierta (el layout la resuelve en
+ * servidor) y "Salir", que borra la sesión en el servidor antes de volver al
+ * login. Si el cierre falla no se navega: mandar al login con la cookie todavía
+ * viva daría a entender una salida que no ha ocurrido.
  */
 
 const ACTIVO = "bg-surface text-ink";
 const INACTIVO = "text-muted hover:bg-surface/70 hover:text-ink";
 
-export function Sidebar() {
+interface SidebarProps {
+  usuario: Pick<Usuario, "nombre" | "documento">;
+}
+
+export function Sidebar({ usuario }: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const [abierto, setAbierto] = useState(false);
+  const [saliendo, setSaliendo] = useState(false);
+  const [errorSalida, setErrorSalida] = useState<string | null>(null);
   const cerrar = () => setAbierto(false);
+
+  const salir = async () => {
+    setSaliendo(true);
+    setErrorSalida(null);
+    try {
+      await sesionApi.cerrar();
+      cerrar();
+      router.replace("/login");
+    } catch {
+      setErrorSalida("No se pudo cerrar la sesión. Inténtalo de nuevo.");
+      setSaliendo(false);
+    }
+  };
 
   const enlaces = (
     <nav aria-label="Secciones del panel" className="flex flex-col gap-1">
@@ -69,6 +96,13 @@ export function Sidebar() {
 
   const pie = (
     <div className="flex flex-col gap-1 border-t border-line pt-4">
+      <div className="px-4 pb-3">
+        <p className="u-label text-[0.6em]! text-muted/70">Sesión</p>
+        <p className="mt-2 truncate text-sm text-ink" title={usuario.nombre}>
+          {usuario.nombre}
+        </p>
+        <p className="text-xs text-muted">{usuario.documento}</p>
+      </div>
       <Link
         href="/"
         onClick={cerrar}
@@ -77,15 +111,20 @@ export function Sidebar() {
         <ExternalLinkIcon className="size-4" />
         Ver sitio público
       </Link>
-      {/* TODO(backend): cerrar sesión de verdad cuando exista autenticación. */}
-      <Link
-        href="/login"
-        onClick={cerrar}
-        className="u-label flex items-center gap-3 px-4 py-3 text-muted transition-colors hover:text-ink"
+      <button
+        type="button"
+        onClick={salir}
+        disabled={saliendo}
+        className="u-label flex cursor-pointer items-center gap-3 px-4 py-3 text-left text-muted transition-colors hover:text-ink disabled:opacity-40"
       >
         <LogOutIcon className="size-4" />
-        Salir
-      </Link>
+        {saliendo ? "Saliendo…" : "Salir"}
+      </button>
+      {errorSalida && (
+        <p role="alert" className="px-4 text-xs text-red-700">
+          {errorSalida}
+        </p>
+      )}
     </div>
   );
 

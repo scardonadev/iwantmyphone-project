@@ -2,48 +2,55 @@
 
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import { BackofficeError, sesionApi } from "@lib/backoffice/api";
+import { errorDocumento, errorPasswordLogin } from "@utils/credenciales";
 
 /**
  * Acceso al panel: documento de identidad + contraseña.
  *
- * **No hay autenticación todavía** —no existe endpoint de sesión en el
- * contrato—, así que el formulario valida el formato en cliente y entra al
- * panel. El aviso al pie lo dice explícitamente en vez de simular una
- * comprobación que no ocurre, igual que hace `Newsletter` en el sitio público
- * (AGENTS.md §6).
+ * El formato se valida en cliente con las mismas reglas que la API
+ * (`@utils/credenciales`), y las credenciales van a `POST /api/sesion` a través
+ * de `sesionApi`. El servidor deja el JWT en una cookie HttpOnly: el formulario
+ * no guarda ningún token, solo navega a `destino`.
  *
- * Cuando exista el backend, el único cambio es el cuerpo de `onSubmit`: el
- * `router.push` pasa a ser la respuesta correcta de la petición de sesión.
+ * Los rechazos del servidor (credenciales incorrectas, usuario pendiente de
+ * activación, BD caída) llegan como `BackofficeError` y salen en el mismo aviso
+ * que los errores de formato.
  */
 
-const SOLO_DIGITOS = /^\d+$/;
+interface LoginFormProps {
+  /** Ruta del panel a la que volver; la página ya la ha validado. */
+  destino: string;
+}
 
-export function LoginForm() {
+export function LoginForm({ destino }: LoginFormProps) {
   const router = useRouter();
   const [documento, setDocumento] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
 
-  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
     const doc = documento.trim();
-    if (!SOLO_DIGITOS.test(doc) || doc.length < 6) {
-      setError(
-        "El documento debe tener al menos 6 dígitos, sin puntos ni espacios.",
-      );
-      return;
-    }
-    if (password.length < 6) {
-      setError("La contraseña debe tener al menos 6 caracteres.");
+    const errorFormato = errorDocumento(doc) ?? errorPasswordLogin(password);
+    if (errorFormato) {
+      setError(errorFormato);
       return;
     }
 
     setError(null);
     setEnviando(true);
-    // TODO(backend): POST de credenciales y sesión antes de navegar.
-    router.push("/dashboard");
+    try {
+      await sesionApi.iniciar(doc, password);
+      // `enviando` se queda en true: el botón sigue bloqueado hasta que la
+      // navegación desmonte el formulario.
+      router.replace(destino);
+    } catch (causa) {
+      setError(causa instanceof BackofficeError ? causa.message : "No se pudo iniciar sesión.");
+      setEnviando(false);
+    }
   };
 
   return (

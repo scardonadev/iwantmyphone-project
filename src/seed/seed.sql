@@ -16,6 +16,8 @@
 -- un id ajeno (`marcas`), así que marca y catálogo se siembran juntos.
 -- `especificaciones` y `comentarios` cuelgan de `celulares` y se enlazan por
 -- `modelo`, no por id, así que cada una se puede sembrar por su cuenta.
+-- `usuarios` (inicio de sesión del backoffice) no se relaciona con ninguna
+-- otra tabla: también se siembra por libre.
 --
 -- Claves primarias UUID v4 (`gen_random_uuid()`, extensión pgcrypto).
 --
@@ -38,6 +40,7 @@ DECLARE
     faltaba_especificaciones BOOLEAN := to_regclass('public.especificaciones') IS NULL;
     faltaba_celulares        BOOLEAN := to_regclass('public.celulares')        IS NULL;
     faltaba_comentarios      BOOLEAN := to_regclass('public.comentarios')      IS NULL;
+    faltaba_usuarios         BOOLEAN := to_regclass('public.usuarios')         IS NULL;
 
     v_marca_id UUID;
     v_filas    INT;
@@ -100,9 +103,24 @@ BEGIN
             ON UPDATE CASCADE ON DELETE CASCADE
     );
 
+    -- Inicio de sesión del backoffice. Sin FK con el catálogo y sin roles.
+    -- `password_hash` guarda scrypt en formato `scrypt:N:r:p:sal:hash`
+    -- (src/lib/auth/password.ts), nunca la contraseña en claro.
+    -- `is_active` nace en FALSE: un alta desde `POST /api/usuarios` no entra al
+    -- panel hasta que alguien la activa a mano en la BD.
+    CREATE TABLE IF NOT EXISTS usuarios (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        documento VARCHAR(20) NOT NULL UNIQUE,
+        nombre VARCHAR(100) NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        is_active BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT chk_usuarios_documento CHECK (documento ~ '^[0-9]{6,20}$')
+    );
+
     IF NOT (faltaba_marcas OR faltaba_especificaciones
-            OR faltaba_celulares OR faltaba_comentarios) THEN
-        RAISE NOTICE '[seed] Las 4 tablas ya existían: no se inserta nada.';
+            OR faltaba_celulares OR faltaba_comentarios OR faltaba_usuarios) THEN
+        RAISE NOTICE '[seed] Las 5 tablas ya existían: no se inserta nada.';
         RETURN;
     END IF;
 
@@ -459,5 +477,23 @@ BEGIN
         ) AS v (modelo, nombre, mensaje, calificacion, desfase) ON v.modelo = c.modelo;
     ELSE
         RAISE NOTICE '[seed] comentarios ya existía: no se insertan valoraciones.';
+    END IF;
+
+    IF faltaba_usuarios THEN
+        -- 5. Usuario del backoffice para desarrollo, ya activo.
+        --
+        --   documento:  1234567890
+        --   contraseña: Admin1234
+        --
+        -- Hash scrypt con los mismos parámetros que `hashPassword()`
+        -- (src/lib/auth/password.ts). La sal es aleatoria: regenerarlo da otra
+        -- cadena igual de válida. Fuera de local, cambiar la contraseña o
+        -- borrar este usuario.
+        INSERT INTO usuarios (documento, nombre, password_hash, is_active)
+        VALUES ('1234567890', 'Administrador',
+                'scrypt:16384:8:1:Py-pkFomaTdn5kyA9I3IDg:YwuV1Z4TuUIARzcBJ2UowAkIVmvd_N8ol_HapdzcYolsDTDBHSyEhCHKKnUe0pzqUXvMd3RO-rGtw8sN6D8CDA',
+                TRUE);
+    ELSE
+        RAISE NOTICE '[seed] usuarios ya existía: no se crea el usuario de desarrollo.';
     END IF;
 END $$;

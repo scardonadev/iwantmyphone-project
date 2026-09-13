@@ -13,6 +13,8 @@ export class ApiClientError extends Error {
   constructor(
     message: string,
     readonly code: string,
+    /** `error.details` de la API, p. ej. `{ campos: { modelo: "…" } }`. */
+    readonly details?: unknown,
   ) {
     super(message);
     this.name = "ApiClientError";
@@ -24,9 +26,7 @@ export interface ApiResult<T> {
   meta?: PaginationMeta;
 }
 
-export async function apiGet<T>(path: string, signal?: AbortSignal): Promise<ApiResult<T>> {
-  const response = await fetch(`${BASE}${path}`, { signal, headers: { Accept: "application/json" } });
-
+async function leerRespuesta<T>(response: Response): Promise<ApiResult<T>> {
   let body: ApiResponse<T>;
   try {
     body = (await response.json()) as ApiResponse<T>;
@@ -34,9 +34,39 @@ export async function apiGet<T>(path: string, signal?: AbortSignal): Promise<Api
     throw new ApiClientError("Respuesta no válida del servidor", "INTERNAL_ERROR");
   }
 
-  if (!body.success) throw new ApiClientError(body.error.message, body.error.code);
+  if (!body.success) {
+    throw new ApiClientError(body.error.message, body.error.code, body.error.details);
+  }
 
   return { data: body.data, meta: body.meta };
+}
+
+export async function apiGet<T>(path: string, signal?: AbortSignal): Promise<ApiResult<T>> {
+  const response = await fetch(`${BASE}${path}`, { signal, headers: { Accept: "application/json" } });
+  return leerRespuesta<T>(response);
+}
+
+/**
+ * Escrituras, con el cuerpo como JSON.
+ *
+ * La cookie de sesión viaja sola porque la API es del mismo origen. Si BASE
+ * pasa a apuntar a otro dominio, harán falta `credentials: "include"` aquí y
+ * CORS con credenciales en el backend.
+ */
+export async function apiSend<T>(
+  method: "POST" | "PATCH" | "DELETE",
+  path: string,
+  body?: unknown,
+): Promise<ApiResult<T>> {
+  const response = await fetch(`${BASE}${path}`, {
+    method,
+    headers:
+      body === undefined
+        ? { Accept: "application/json" }
+        : { Accept: "application/json", "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return leerRespuesta<T>(response);
 }
 
 /** Serializa los filtros al formato JSON estricto que espera la API (§5). */

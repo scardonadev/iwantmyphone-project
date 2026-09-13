@@ -7,9 +7,7 @@ const nextConfig: NextConfig = {
     remotePatterns: [
       {
         protocol: "https",
-        hostname: "img.appledb.dev",
-        port: "",
-        pathname: "/**",
+        hostname: "**", // El doble asterisco permite cualquier dominio
       },
     ],
   },
