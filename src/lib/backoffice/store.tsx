@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
-import { cargarDataset, celularesApi, especificacionesApi, marcasApi } from "./api";
+import { celularesApi, especificacionesApi, marcasApi, recargarDataset } from "./api";
 import type {
   CelularInput,
   CelularRecord,
@@ -73,12 +73,23 @@ export function BackofficeProvider({ datosIniciales, children }: BackofficeProvi
     const celularesIdx = new Map(dataset.celulares.map((c) => [c.id, c]));
     const especIdx = new Map(dataset.especificaciones.map((e) => [e.celular_id, e]));
 
-    // Tras cada escritura correcta se relee el catálogo entero: una sola fuente
-    // de verdad y ninguna copia optimista que reconciliar. Si la escritura
-    // falla, la excepción sube sin tocar el estado.
+    // Tras cada escritura correcta se relee el catálogo entero
+    // (`GET /api/backoffice/dataset`): una sola fuente de verdad —la BD— y
+    // ninguna copia optimista que reconciliar. Así llegan solos también los
+    // efectos que no se ven desde la fila, como la ficha y los comentarios que
+    // arrastra el ON DELETE CASCADE al borrar un celular.
+    //
+    // Si la escritura falla, la excepción sube sin tocar el estado. Si solo
+    // falla la relectura, la escritura ya está hecha y no se propaga: la fila
+    // volvería al paso editable y un segundo "Confirmar" duplicaría el alta.
+    // El listado se pone al día en la siguiente escritura o al recargar.
     const tras = async <T,>(operacion: Promise<T>): Promise<T> => {
       const resultado = await operacion;
-      setDataset(await cargarDataset());
+      try {
+        setDataset(await recargarDataset());
+      } catch (error) {
+        console.warn("[backoffice] escritura hecha, pero no se pudo releer el catálogo:", error);
+      }
       return resultado;
     };
 

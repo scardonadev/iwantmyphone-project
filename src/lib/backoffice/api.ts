@@ -1,25 +1,28 @@
-import { crearDatasetInicial } from "./mock-data";
+import { ApiClientError, apiGet, apiSend } from "@lib/api-client";
 import type {
-  CelularInput,
-  CelularRecord,
-  Dataset,
-  EspecificacionInput,
-  EspecificacionRecord,
-  MarcaInput,
-  MarcaRecord,
-} from "./types";
+  CelularDetalle,
+  CelularEntrada,
+  Especificacion,
+  FichaTecnica,
+  MarcaDetalle,
+  MarcaEntrada,
+  SesionIniciada,
+  Usuario,
+} from "@/src/types/api";
+import type { CelularInput, Dataset, EspecificacionInput, MarcaInput } from "./types";
 
 /**
  * Capa de datos del backoffice — **único punto de acoplamiento con el backend**.
  *
- * Hoy resuelve todo contra un dataset en memoria (`mock-data.ts`) porque los
- * endpoints de escritura todavía no existen. Cada método está anotado con la
- * ruta REST que lo sustituirá; cuando el backend esté, se reemplaza el cuerpo
- * por un `fetch` y **ninguna vista cambia**: la firma ya es asíncrona y ya
- * devuelve el registro creado/actualizado.
+ * Todo pasa ya por la API real, a través de `@lib/api-client`. Las vistas
+ * trabajan con filas de la BD (`./types`: `logo_url`, `images_urls` como CSV)
+ * y la API con su contrato (§4: `logo`, `images_url` como array). La
+ * traducción entre los dos vive aquí y en ningún otro sitio.
  *
- * Es el equivalente para escritura de lo que `@lib/api-client` es para lectura
- * en el frontend público (AGENTS.md §1).
+ * Las escrituras exigen en el servidor la sesión de un usuario activo
+ * (`requireSesion()`). Un 401/403 llega como cualquier otro rechazo: un
+ * `BackofficeError` con el mensaje de la API, que la fila enseña sin perder lo
+ * tecleado.
  */
 
 /** Error de dominio: la vista lo muestra en la fila, no en una pantalla de error. */
@@ -30,170 +33,175 @@ export class BackofficeError extends Error {
   }
 }
 
-/**
- * El dataset vive a nivel de módulo, no dentro del provider: así sobrevive a
- * las navegaciones entre `/dashboard/*` (que remontan cada página) y una alta
- * en Marcas se ve al instante en el select de Celulares.
- */
-let dataset: Dataset | null = null;
-
-const db = (): Dataset => (dataset ??= crearDatasetInicial());
-
-/** Latencia simulada: sin ella los estados de carga no se pueden probar. */
-const LATENCIA_MS = 180;
-const latencia = () => new Promise((resolve) => setTimeout(resolve, LATENCIA_MS));
-
-const nuevoId = () => crypto.randomUUID();
-const ahora = () => new Date().toISOString();
-
-async function commit<T>(fn: () => T): Promise<T> {
-  await latencia();
-  return fn();
-}
+const ruta = (coleccion: string, id: string) => `/api/${coleccion}/${encodeURIComponent(id)}`;
 
 /**
- * Lectura completa del catálogo.
+ * Relectura del catálogo tras cada escritura (`GET /api/backoffice/dataset`).
  *
- * Sin latencia simulada, al contrario que las escrituras: la lectura inicial la
- * resuelve el layout —un Server Component— antes de pintar, que es como accede
- * a datos el resto del proyecto (AGENTS.md §2). El día que haya endpoints, esta
- * función pasa a ser un `Promise.all` de queries y nada más cambia.
- *
- * TODO(backend): sustituir por los `GET` de listado de cada entidad.
+ * La carga inicial no pasa por aquí: la hace el layout —un Server Component—
+ * con `cargarDatasetBackoffice()`, sin ir por HTTP (AGENTS.md §2).
  */
-export async function cargarDataset(): Promise<Dataset> {
-  return structuredClone(db());
-}
+export const recargarDataset = (): Promise<Dataset> =>
+  comoErrorDelPanel(async () => (await apiGet<Dataset>("/api/backoffice/dataset")).data);
+
+const aMarcaEntrada = (input: MarcaInput): MarcaEntrada => ({
+  nombre: input.nombre,
+  pais_origen: input.pais_origen,
+  logo: input.logo_url,
+});
+
+/** La columna es un CSV (§3); la API lo quiere como array. */
+const aCelularEntrada = (input: CelularInput): CelularEntrada => ({
+  marca_id: input.marca_id,
+  modelo: input.modelo,
+  precio: input.precio,
+  fecha_lanzamiento: input.fecha_lanzamiento,
+  images_url: (input.images_urls ?? "")
+    .split(",")
+    .map((url) => url.trim())
+    .filter(Boolean),
+});
 
 export const marcasApi = {
-  /** TODO(backend): `POST /api/marcas`. */
-  crear: (input: MarcaInput): Promise<MarcaRecord> =>
-    commit(() => {
-      const nombre = input.nombre.trim();
-      if (db().marcas.some((m) => m.nombre.toLowerCase() === nombre.toLowerCase())) {
-        // `marcas.nombre` es UNIQUE en el esquema (AGENTS.md §3).
-        throw new BackofficeError(`Ya existe una marca llamada "${nombre}"`);
-      }
-
-      const marca: MarcaRecord = {
-        ...input,
-        nombre,
-        id: nuevoId(),
-        created_at: ahora(),
-      };
-      db().marcas.push(marca);
-      return structuredClone(marca);
+  /** `POST /api/marcas`. */
+  crear: (input: MarcaInput): Promise<MarcaDetalle> =>
+    comoErrorDelPanel(async () => {
+      const { data } = await apiSend<MarcaDetalle>("POST", "/api/marcas", aMarcaEntrada(input));
+      return data;
     }),
 
-  /** TODO(backend): `PATCH /api/marcas/[id]`. */
-  actualizar: (id: string, input: MarcaInput): Promise<MarcaRecord> =>
-    commit(() => {
-      const marca = db().marcas.find((m) => m.id === id);
-      if (!marca) throw new BackofficeError("La marca ya no existe");
-
-      const nombre = input.nombre.trim();
-      const duplicada = db().marcas.some(
-        (m) => m.id !== id && m.nombre.toLowerCase() === nombre.toLowerCase(),
+  /** `PATCH /api/marcas/[id]`. */
+  actualizar: (id: string, input: MarcaInput): Promise<MarcaDetalle> =>
+    comoErrorDelPanel(async () => {
+      const { data } = await apiSend<MarcaDetalle>(
+        "PATCH",
+        ruta("marcas", id),
+        aMarcaEntrada(input),
       );
-      if (duplicada) throw new BackofficeError(`Ya existe una marca llamada "${nombre}"`);
-
-      Object.assign(marca, input, { nombre });
-      return structuredClone(marca);
+      return data;
     }),
 
-  /** TODO(backend): `DELETE /api/marcas/[id]`. */
+  /** `DELETE /api/marcas/[id]`. Con celulares asociados, 409 (ON DELETE RESTRICT). */
   eliminar: (id: string): Promise<void> =>
-    commit(() => {
-      // `celulares.marca_id` es ON DELETE RESTRICT: la BD rechazaría el borrado.
-      const enUso = db().celulares.filter((c) => c.marca_id === id).length;
-      if (enUso > 0) {
-        throw new BackofficeError(
-          `No se puede eliminar: ${enUso} ${enUso === 1 ? "celular usa" : "celulares usan"} esta marca`,
-        );
-      }
-
-      db().marcas = db().marcas.filter((m) => m.id !== id);
+    comoErrorDelPanel(async () => {
+      await apiSend<null>("DELETE", ruta("marcas", id));
     }),
 };
 
 export const celularesApi = {
-  /** TODO(backend): `POST /api/celulares`. */
-  crear: (input: CelularInput): Promise<CelularRecord> =>
-    commit(() => {
-      if (!db().marcas.some((m) => m.id === input.marca_id)) {
-        throw new BackofficeError("La marca seleccionada ya no existe");
-      }
-
-      const celular: CelularRecord = { ...input, id: nuevoId(), created_at: ahora() };
-      db().celulares.push(celular);
-      return structuredClone(celular);
+  /** `POST /api/celulares`. */
+  crear: (input: CelularInput): Promise<CelularDetalle> =>
+    comoErrorDelPanel(async () => {
+      const { data } = await apiSend<CelularDetalle>(
+        "POST",
+        "/api/celulares",
+        aCelularEntrada(input),
+      );
+      return data;
     }),
 
-  /** TODO(backend): `PATCH /api/celulares/[id]`. */
-  actualizar: (id: string, input: CelularInput): Promise<CelularRecord> =>
-    commit(() => {
-      const celular = db().celulares.find((c) => c.id === id);
-      if (!celular) throw new BackofficeError("El celular ya no existe");
-      if (!db().marcas.some((m) => m.id === input.marca_id)) {
-        throw new BackofficeError("La marca seleccionada ya no existe");
-      }
-
-      Object.assign(celular, input);
-      return structuredClone(celular);
+  /** `PATCH /api/celulares/[id]`. */
+  actualizar: (id: string, input: CelularInput): Promise<CelularDetalle> =>
+    comoErrorDelPanel(async () => {
+      const { data } = await apiSend<CelularDetalle>(
+        "PATCH",
+        ruta("celulares", id),
+        aCelularEntrada(input),
+      );
+      return data;
     }),
 
-  /** TODO(backend): `DELETE /api/celulares/[id]`. */
+  /** `DELETE /api/celulares/[id]`. Su ficha y sus comentarios caen con él (ON DELETE CASCADE). */
   eliminar: (id: string): Promise<void> =>
-    commit(() => {
-      db().celulares = db().celulares.filter((c) => c.id !== id);
-      // ON DELETE CASCADE: ficha y comentarios se van con el celular (§3).
-      db().especificaciones = db().especificaciones.filter((e) => e.celular_id !== id);
-      db().comentarios = db().comentarios.filter((c) => c.celular_id !== id);
+    comoErrorDelPanel(async () => {
+      await apiSend<null>("DELETE", ruta("celulares", id));
     }),
 };
 
 export const especificacionesApi = {
-  /** TODO(backend): `POST /api/especificaciones`. */
-  crear: (input: EspecificacionInput): Promise<EspecificacionRecord> =>
-    commit(() => {
-      if (!db().celulares.some((c) => c.id === input.celular_id)) {
-        throw new BackofficeError("El celular indicado no existe");
-      }
-      // `especificaciones.celular_id` es UNIQUE: la relación es 1:1 (§3).
-      if (db().especificaciones.some((e) => e.celular_id === input.celular_id)) {
-        throw new BackofficeError("Ese celular ya tiene ficha técnica");
-      }
-
-      const especificacion: EspecificacionRecord = {
-        ...input,
-        id: nuevoId(),
-        created_at: ahora(),
-      };
-      db().especificaciones.push(especificacion);
-      return structuredClone(especificacion);
+  /** `POST /api/especificaciones`. 409 si el celular ya tiene ficha (UNIQUE). */
+  crear: (input: EspecificacionInput): Promise<Especificacion> =>
+    comoErrorDelPanel(async () => {
+      const { data } = await apiSend<Especificacion>("POST", "/api/especificaciones", input);
+      return data;
     }),
 
   /**
-   * TODO(backend): `PATCH /api/especificaciones/[id]`.
+   * `PATCH /api/especificaciones/[id]`.
    *
-   * `celular_id` se ignora a propósito: la ficha no se reasigna desde el
-   * dashboard, se borra y se crea desde el celular que corresponda.
+   * `celular_id` no viaja: la ficha no se reasigna desde el dashboard, se borra
+   * y se crea desde el celular que corresponda. La API lo rechazaría con 400.
    */
   actualizar: (
     id: string,
     input: Omit<EspecificacionInput, "celular_id">,
-  ): Promise<EspecificacionRecord> =>
-    commit(() => {
-      const especificacion = db().especificaciones.find((e) => e.id === id);
-      if (!especificacion) throw new BackofficeError("La especificación ya no existe");
-
-      Object.assign(especificacion, input);
-      return structuredClone(especificacion);
+  ): Promise<Especificacion> =>
+    comoErrorDelPanel(async () => {
+      const cuerpo: FichaTecnica = input;
+      const { data } = await apiSend<Especificacion>(
+        "PATCH",
+        ruta("especificaciones", id),
+        cuerpo,
+      );
+      return data;
     }),
 
-  /** TODO(backend): `DELETE /api/especificaciones/[id]`. */
+  /** `DELETE /api/especificaciones/[id]`. */
   eliminar: (id: string): Promise<void> =>
-    commit(() => {
-      db().especificaciones = db().especificaciones.filter((e) => e.id !== id);
+    comoErrorDelPanel(async () => {
+      await apiSend<null>("DELETE", ruta("especificaciones", id));
     }),
 };
+
+/**
+ * Sesión del panel, contra `/api/sesion`.
+ *
+ * El JWT lo guarda el servidor en una cookie HttpOnly y aquí no se toca. El
+ * `token` que el login también devuelve en el cuerpo es para clientes que no
+ * son un navegador, y se descarta a propósito.
+ */
+export const sesionApi = {
+  /** `POST /api/sesion`. */
+  iniciar: (documento: string, password: string): Promise<Usuario> =>
+    comoErrorDelPanel(async () => {
+      const { data } = await apiSend<SesionIniciada>("POST", "/api/sesion", {
+        documento,
+        password,
+      });
+      return data.usuario;
+    }),
+
+  /** `DELETE /api/sesion`. */
+  cerrar: (): Promise<void> =>
+    comoErrorDelPanel(async () => {
+      await apiSend<null>("DELETE", "/api/sesion");
+    }),
+};
+
+/**
+ * Convierte los fallos de red y de la API en el error que las vistas ya
+ * muestran. Si la API detalla los campos inválidos (`details.campos`, §4), esos
+ * mensajes sustituyen al genérico: "Datos no válidos" no dice qué corregir.
+ */
+async function comoErrorDelPanel<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (causa) {
+    if (causa instanceof ApiClientError) throw new BackofficeError(mensajeDeApi(causa));
+    throw new BackofficeError("No se pudo contactar con el servidor");
+  }
+}
+
+function mensajeDeApi(error: ApiClientError): string {
+  const detalles = error.details;
+  if (typeof detalles === "object" && detalles !== null && "campos" in detalles) {
+    const { campos } = detalles as { campos: unknown };
+    if (typeof campos === "object" && campos !== null) {
+      const mensajes = Object.values(campos).filter(
+        (mensaje): mensaje is string => typeof mensaje === "string",
+      );
+      if (mensajes.length > 0) return mensajes.join(" ");
+    }
+  }
+  return error.message;
+}

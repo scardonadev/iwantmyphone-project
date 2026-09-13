@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Sidebar } from "@components/dashboard/Sidebar";
-import { cargarDataset } from "@lib/backoffice/api";
+import { verificarSesion } from "@lib/auth/session";
 import { BackofficeProvider } from "@lib/backoffice/store";
+import { cargarDatasetBackoffice } from "@lib/queries/backoffice";
 
 export const metadata: Metadata = {
   title: { default: "Panel", template: "%s | Panel" },
@@ -10,6 +11,12 @@ export const metadata: Metadata = {
 
 /**
  * Estructura del backoffice: menú lateral fijo + contenido.
+ *
+ * Primero la sesión. `proxy.ts` ya filtró la petición mirando solo la firma
+ * del JWT. Aquí va la comprobación segura, contra la BD: el usuario existe y
+ * sigue activo. Si no, `verificarSesion()` redirige a `/login` antes de cargar
+ * ningún dato. El layout no se vuelve a ejecutar al navegar entre secciones
+ * (Partial Rendering), pero cada una de esas peticiones pasa por el proxy.
  *
  * El catálogo se resuelve aquí, en servidor, y baja al proveedor como estado
  * inicial —el mismo reparto que usa la Home pública con `ListadoCelulares`
@@ -20,12 +27,14 @@ export const metadata: Metadata = {
  * sobreviva a la navegación entre secciones.
  */
 export default async function DashboardLayout({ children }: LayoutProps<"/dashboard">) {
-  const datosIniciales = await cargarDataset();
+  const { usuario } = await verificarSesion();
+  const datosIniciales = await cargarDatasetBackoffice();
 
   return (
     <BackofficeProvider datosIniciales={datosIniciales}>
       <div className="flex-1 lg:flex">
-        <Sidebar />
+        {/* Solo lo que el menú pinta: el resto del usuario no baja al cliente. */}
+        <Sidebar usuario={{ nombre: usuario.nombre, documento: usuario.documento }} />
         <div className="min-w-0 flex-1 px-5 py-10 sm:px-8 lg:px-12 lg:py-14">
           {children}
         </div>

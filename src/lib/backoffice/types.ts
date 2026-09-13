@@ -58,6 +58,7 @@ export interface Dataset {
   marcas: MarcaRecord[];
   celulares: CelularRecord[];
   especificaciones: EspecificacionRecord[];
+  /** Solo los 10 más recientes: es lo único que el panel pinta. */
   comentarios: ComentarioRecord[];
 }
 
