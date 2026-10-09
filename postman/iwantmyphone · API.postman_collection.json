@@ -1,0 +1,840 @@
+{
+  "info": {
+    "_postman_id": "4256df0c-9bfd-4362-b4a4-512dd1fce6f6",
+    "name": "iwantmyphone · API",
+    "description": "# iwantmyphone · API REST\n\n## Convenciones\n\n- Éxito: `{ success: true, data }`, con `meta` en los listados paginados.\n    \n- Error: `{ success: false, error: { code, message, details? } }`, con `code` en `BAD_REQUEST` (400),  \n    `UNAUTHORIZED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409) e `INTERNAL_ERROR` (500).\n    \n- Los errores de formato llegan **todos a la vez** en `details.campos` (`campo → mensaje`).\n    \n- Todas las lecturas del catálogo son públicas; las escrituras de marcas, celulares y especificaciones exigen  \n    sesión de un usuario **activo** (401 sin token, 403 si `is_active = false`). `/api/sesion` y `POST /api/usuarios`  \n    son las únicas escrituras sin sesión.\n    \n- Todo id se valida como UUID antes de tocar la BD: 400, nunca 500.\n    \n- Cualquier verbo que un Route Handler no exporte devuelve 405.\n    \n\n## Autenticación en Postman\n\nPostman guarda la cookie `iwmp_sesion` en su cookie jar **y** manda el `Authorization: Bearer {{token}}` que  \nañade el pre-request. El servidor prioriza el header.\n\nLas peticiones que demuestran un 401 llevan la cabecera `X-Sin-Sesion: 1` (el pre-request las deja sin  \n`Authorization`), pero **la cookie las autenticaría igual**: ejecútalas tras `DELETE /api/sesion` o borra la  \ncookie desde Cookies → `localhost`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "49336036",
+    "_collection_link": "https://go.postman.co/collection/49336036-4256df0c-9bfd-4362-b4a4-512dd1fce6f6?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "00 · Flujo de login (sesión y usuarios)",
+      "item": [
+        {
+          "name": "1 · Iniciar sesión (200 · guarda {{token}})",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test(\"200 y sesión iniciada\", () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(res.success).to.be.true;",
+                  "});",
+                  "pm.environment.set('token', res.data.token);",
+                  "pm.environment.set('usuario_id', res.data.usuario.id);"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documento\": \"{{documento}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/sesion",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sesion"
+              ]
+            },
+            "description": "Credenciales del usuario de desarrollo que siembra `seed.sql`. Devuelve `{ usuario, token, expires_at }`  \ny fija la cookie `iwmp_sesion` (`HttpOnly; SameSite=Lax; Path=/`, `Secure` en producción).\n\nEl navegador usa la cookie; el `token` del cuerpo es para clientes que no son un navegador — Postman es uno  \nde ellos, así que el test lo guarda en `{{token}}` y el pre-request de la colección lo manda como  \n`Authorization: Bearer` en todas las escrituras.\n\nPayload del JWT: solo `sub`, `iss`, `aud`, `iat` y `exp`. Ni nombre ni documento."
+          },
+          "response": []
+        },
+        {
+          "name": "2 · Sesión en curso (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 · sesión vigente\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/sesion",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sesion"
+              ]
+            },
+            "description": "Acepta la cookie o `Authorization: Bearer <jwt>`; si llegan los dos, **manda el header**.\n\nConsulta la BD en cada llamada, así que una desactivación manual se nota al instante:\n401 si no hay token, si es inválido o caducó, o si el usuario ya no existe; 403 si está inactivo."
+          },
+          "response": []
+        },
+        {
+          "name": "3 · Cerrar sesión (200 · borra la cookie)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"200 · cookie borrada\", () => pm.response.to.have.status(200));\r",
+                  "if(pm.response.code === 200){  \r",
+                  "    pm.environment.set('token', \"\");\r",
+                  "    pm.environment.set('usuario_id', \"\");\r",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/sesion",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sesion"
+              ]
+            },
+            "description": "Responde `data: null` y caduca la cookie.\n\n**A propósito, el test no borra `{{token}}`**: el JWT no tiene estado en servidor y sigue valiendo hasta su\n`exp`, así que el resto de la colección sigue funcionando por `Authorization` después de este logout.\nEs exactamente la contrapartida documentada del diseño sin tabla de sesiones."
+          },
+          "response": []
+        }
+      ],
+      "description": "El login del usuario de desarrollo del seed (`1234567890` / `Admin1234`) devuelve **200**, fija la cookie  \n`iwmp_sesion` (HttpOnly) y guarda el JWT en la variable `{{token}}`, que el resto de la colección usa  \ncomo `Authorization: Bearer`.\n\nEl JWT dura 8 horas, no se renueva y no tiene estado en servidor: `DELETE /api/sesion` solo borra la cookie,  \nasí que una copia del token sigue valiendo hasta su `exp`. Para cortar el acceso de verdad ajustar en el usuario en la DB: `is_active = false`."
+    },
+    {
+      "name": "01 · Marcas (CRUD)",
+      "item": [
+        {
+          "name": "GET · Listado paginado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test(\"200 con data y meta\", () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(res.meta).to.have.property('totalPages');",
+                  "});",
+                  "if (res.data[0]) pm.environment.set('marca_id', res.data[0].id);"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/marcas?page=1&limit=12",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "marcas"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "12"
+                }
+              ]
+            },
+            "description": "Ordenado por nombre. `page` 1-based, `limit` por defecto 12 y con tope 50 (fuera de rango se recorta, no falla)."
+          },
+          "response": []
+        },
+        {
+          "name": "GET · Detalle",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 · marca encontrada\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/marcas/{{marca_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "marcas",
+                "{{marca_id}}"
+              ]
+            },
+            "description": "404 si el id no existe; 400 si el segmento no es un UUID (nunca 500: se valida antes de tocar la BD)."
+          },
+          "response": []
+        },
+        {
+          "name": "POST · Crear marca (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();\npm.test(\"201 · marca creada\", () => pm.response.to.have.status(201));\nif (res.data) pm.environment.set('marca_nueva_id', res.data.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Postman Marca\",\n  \"pais_origen\": \"Colombia\",\n  \"logo\": \"https://img.appledb.dev/logo.png\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/marcas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "marcas"
+              ]
+            },
+            "description": "`nombre`* (hasta 100) · `pais_origen`* (hasta 100) · `logo` (URL http(s), o `null` / cadena vacía para dejarlo en NULL).\n\nLa unicidad se comprueba **sin distinguir mayúsculas**, porque el `UNIQUE` de la columna sí las distingue\ny dejaría convivir \"Apple\" con \"apple\"."
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH · Actualización parcial (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 · marca actualizada\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pais_origen\": \"México\",\n  \"logo\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/marcas/{{marca_nueva_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "marcas",
+                "{{marca_nueva_id}}"
+              ]
+            },
+            "description": "Solo cambia los campos que vienen, y tiene que venir al menos uno. Devuelve el mismo shape que el `GET`."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE · Eliminar marca (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"200 · marca eliminada\", () => pm.response.to.have.status(200));\r",
+                  "if(pm.response.code === 200){\r",
+                  "    pm.environment.set(\"marca_nueva_id\", \"\"); // Elimina la marca nueva del entorno\r",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/marcas/{{marca_nueva_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "marcas",
+                "{{marca_nueva_id}}"
+              ]
+            },
+            "description": "Responde `data: null`. Solo funciona si la marca no tiene celulares (`ON DELETE RESTRICT`)."
+          },
+          "response": []
+        }
+      ],
+      "description": "`GET` público; `POST`, `PATCH` y `DELETE` exigen sesión de un usuario activo (401 sin token, 403 si está inactivo).\n\n`MarcaDetalle` = `{ id, nombre, logo, pais_origen, created_at }`. En el cuerpo de escritura el campo es **`logo`**,\nno `logo_url`: mandar el nombre de la columna es 400 con la sugerencia del nombre bueno.\n\nEl flujo crea su propia marca (`{{marca_nueva_id}}`) y la borra al final; las marcas del seed no se tocan."
+    },
+    {
+      "name": "02 · Celulares (CRUD)",
+      "item": [
+        {
+          "name": "GET · Listado paginado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();\npm.test(\"200 con data y meta\", () => pm.response.to.have.status(200));\nif (res.data[0]) {\n  pm.environment.set('celular_id', res.data[0].id);\n  pm.environment.set('marca_id', res.data[0].marca.id);\n}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/celulares?page=1&limit=4",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "celulares"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "4"
+                }
+              ]
+            },
+            "description": "Orden `fecha_lanzamiento DESC, modelo ASC`. El segundo criterio es obligatorio: sin él, los modelos que\ncomparten fecha pueden repetirse o desaparecer entre páginas.\n\n`meta` = `{ page, limit, total, totalPages, hasNextPage }`, con el `total` resuelto por `COUNT(*) OVER()`\nen la misma consulta."
+          },
+          "response": []
+        },
+        {
+          "name": "GET · Detalle",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test(\"200 · detalle\", () => pm.response.to.have.status(200));",
+                  "if (res.data && res.data.especificacion_id) {",
+                  "  pm.environment.set('especificacion_id', res.data.especificacion_id);",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/celulares/{{celular_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "celulares",
+                "{{celular_id}}"
+              ]
+            },
+            "description": "Añade `especificacion_id` (`null` si el celular no tiene ficha: la relación 1:1 es opcional) y `valoracion`,\nel promedio de `comentarios.calificacion` con 1 decimal, **0 si no hay comentarios**.\n\n404 si el id no existe, 400 si no es un UUID."
+          },
+          "response": []
+        },
+        {
+          "name": "POST · Crear celular (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();\npm.test(\"201 y precio redondeado\", () => {\n  pm.response.to.have.status(201);\n  pm.expect(res.data.precio).to.eql(1299.99);\n});\nif (res.data) pm.environment.set('celular_nuevo_id', res.data.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"marca_id\": \"{{marca_nueva_id}}\",\n  \"modelo\": \"Postman Celular\",\n  \"precio\": 1000,\n  \"fecha_lanzamiento\": \"2026-09-23\",\n  \"images_url\": [\n    \"https://img.appledb.dev/device@256/iPhone17%2C1/Black.png\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/celulares",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "celulares"
+              ]
+            },
+            "description": "`marca_id`* (UUID) · `modelo`* (hasta 150) · `precio`* (0 a 99 999 999,99, se redondea a 2 decimales) ·\n`fecha_lanzamiento`* (`AAAA-MM-DD` y fecha real: `2026-02-30` es 400) · `images_url` (hasta 20 URLs http(s)\nsin comas; `[]` o `null` guardan NULL).\n\nResponde con el shape del detalle: sin ficha y con `valoracion: 0`."
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH · Actualización parcial (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 · celular actualizado\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"precio\": 2000,\n  \"images_url\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/celulares/{{celular_nuevo_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "celulares",
+                "{{celular_nuevo_id}}"
+              ]
+            },
+            "description": "`images_url: []` deja la columna en NULL, y el `GET` sigue devolviendo un array vacío (nunca `null`)."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE · Eliminar celular (200 · CASCADE)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 · celular eliminado\", () => pm.response.to.have.status(200));\r\nif(pm.response.code === 200){\r\n    pm.environment.set(\"celular_nuevo_id\", \"\");\r\n    pm.environment.set(\"especificacion_nueva_id\", \"\");\r\n}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/celulares/{{celular_nuevo_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "celulares",
+                "{{celular_nuevo_id}}"
+              ]
+            },
+            "description": "Se lleva por delante su ficha técnica y sus comentarios (`ON DELETE CASCADE`): no quedan huérfanos."
+          },
+          "response": []
+        }
+      ],
+      "description": "`GET` públicos (listado con filtros y paginación, y detalle); escrituras con sesión.\n\nRenombres BD → API: la columna `images_urls` (CSV) se expone como **`images_url`** (array), y `marcas.logo_url`\ncomo `marca.logo`. `precio` viaja como número (`599`, no `\"599.00\"`) y `fecha_lanzamiento` como `AAAA-MM-DD`\nsin desplazarse un día.\n\nLas URLs de imagen no pueden llevar una coma sin escapar (la columna es un CSV): `iPhone17,1` va como `iPhone17%2C1`."
+    },
+    {
+      "name": "03 · Especificaciones (CRUD)",
+      "item": [
+        {
+          "name": "GET · Opciones para los selects",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 · opciones\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/especificaciones/opciones",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "especificaciones",
+                "opciones"
+              ]
+            },
+            "description": "`{ options: [{ key, values }] }` con los valores distintos de cada campo filtrable, en el mismo orden fijo.\nAlimenta los `<select>` de la Home iterando el array, sin hardcodear las keys.\n\nEndpoint añadido fuera del requerimiento original: sin él, las opciones habría que escribirlas a mano."
+          },
+          "response": []
+        },
+        {
+          "name": "GET · Ficha por id (key/value)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test(\"200 y 7 filas en orden\", () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(res.data.especificaciones).to.have.lengthOf(7);",
+                  "  pm.expect(res.data.especificaciones[0].key).to.eql('procesador');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/especificaciones/{{especificacion_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "especificaciones",
+                "{{especificacion_id}}"
+              ]
+            },
+            "description": "La API no envía etiquetas legibles: `sistema_op` → \"Sistema operativo\" se resuelve en el frontend\n(`@utils/spec-labels`). 404 si no existe.\n\n`{{especificacion_id}}` lo guarda el **detalle de celular** de la carpeta 02."
+          },
+          "response": []
+        },
+        {
+          "name": "POST · Crear ficha (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test(\"201 · ficha creada\", () => pm.response.to.have.status(201));",
+                  "if (res.data) pm.environment.set('especificacion_nueva_id', res.data.id);"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"celular_id\": \"{{celular_nuevo_id}}\",\n  \"procesador\": \"Apple A19 Pro\",\n  \"ram\": \"12 GB\",\n  \"almacenamiento\": \"256GB / 512GB / 1TB\",\n  \"pantalla\": \"6.3\\\" ProMotion 120Hz\",\n  \"camara\": \"Triple 48 MP (Main, Ultra-Wide, Telephoto 5x)\",\n  \"bateria\": \"3800 mAh\",\n  \"sistema_op\": \"iOS 26.0\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/especificaciones",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "especificaciones"
+              ]
+            },
+            "description": "`celular_id`* más los 7 campos técnicos, todos obligatorios en el alta. Responde en formato key/value, como el `GET`."
+          },
+          "response": []
+        },
+        {
+          "name": "PATCH · Actualización parcial (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 · ficha actualizada\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ram\": \"16 GB\",\n  \"bateria\": \"4200 mAh\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/especificaciones/{{especificacion_nueva_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "especificaciones",
+                "{{especificacion_nueva_id}}"
+              ]
+            },
+            "description": "Cualquier subconjunto de los 7 campos técnicos; al menos uno."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE · Eliminar ficha (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"200 · ficha eliminada\", () => pm.response.to.have.status(200));\r",
+                  "if(pm.response.code === 200){\r",
+                  "    pm.environment.set(\"especificacion_nueva_id\", \"\");\r",
+                  "}"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/especificaciones/{{especificacion_nueva_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "especificaciones",
+                "{{especificacion_nueva_id}}"
+              ]
+            },
+            "description": "El celular sigue existiendo, ahora sin ficha: en el detalle, `especificacion_id` pasa a `null` y la tabla no se pinta."
+          },
+          "response": []
+        }
+      ],
+      "description": "**Sin alta propia desde el catálogo de fichas**: la FK 1:1 vive en `especificaciones.celular_id` (`UNIQUE NOT NULL`,\n`ON DELETE CASCADE`), así que una ficha no existe sin su celular. Por eso esta carpeta **crea primero su propio\ncelular** y lo borra al final.\n\n`celular_id` solo se acepta en el alta: en un `PATCH` es 400. Reasignar una ficha a otro modelo es borrarla y crearla.\n\nLas lecturas devuelven **key/value**, con las 7 filas técnicas siempre presentes y siempre en este orden:\n`procesador`, `ram`, `almacenamiento`, `pantalla`, `camara`, `bateria`, `sistema_op`. El orden es parte del\ncontrato: la tabla del frontend renderiza el array tal cual. `id` y `created_at` quedan fuera del array, y\n`celular_id` no se expone."
+    },
+    {
+      "name": "04 · Comentarios (solo lectura)",
+      "item": [
+        {
+          "name": "GET · Comentarios de un celular",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 · comentarios paginados\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/comentarios?celular_id={{celular_id}}&page=1&limit=5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "comentarios"
+              ],
+              "query": [
+                {
+                  "key": "celular_id",
+                  "value": "{{celular_id}}"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "5"
+                }
+              ]
+            },
+            "description": "Orden `fecha DESC, id ASC`. Sin comentarios devuelve **200 con `data: []` y `meta.total: 0`**, no 404:\nel celular puede existir y no tener valoraciones todavía.\n\nEl seed trae 87 comentarios, 1 o 2 por celular, así que con `limit=5` el `hasNextPage` sale `false`."
+          },
+          "response": []
+        },
+        {
+          "name": "400 · Sin celular_id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"400 · celular_id obligatorio\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/comentarios",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "comentarios"
+              ]
+            },
+            "description": "`celular_id` es obligatorio y se valida como UUID: 400 si falta o no lo es."
+          },
+          "response": []
+        }
+      ],
+      "description": "El requerimiento excluye su CRUD: los comentarios se escriben desde el sitio público y el panel solo los vigila\nen \"últimos agregados\". Aquí solo hay lectura, y es pública.\n\nSe expone como `?celular_id=<uuid>` en lugar de una ruta anidada, igual que sugeridos."
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  }
+}
