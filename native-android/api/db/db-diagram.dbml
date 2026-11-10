@@ -1,0 +1,306 @@
+// =============================================================================
+// iwantmyphone · app nativa — esquema de la base de datos `iwantmyphone_app`
+// =============================================================================
+//
+// Base PROPIA en el mismo host de Postgres que el proyecto Next, pero separada:
+// ni lee ni escribe la base del Next. El catálogo (marcas, celulares,
+// especificaciones, comentarios) se siembra con los mismos datos que
+// src/seed/seed.sql y se amplía con lo que pide el Excel de alcance
+// (native-android/docs): roles, tienda (carrito -> pedido -> pago), favoritos,
+// direcciones, métodos de pago, biometría y recuperación de contraseña.
+//
+// Convenciones heredadas del Next: PK UUID v4 (gen_random_uuid, pgcrypto),
+// nombres en español, restricciones con nombre (la API las traduce a 400/409
+// por nombre), DECIMAL(10,2) para dinero.
+//
+// Pegar en https://dbdiagram.io para verlo.
+// =============================================================================
+
+Enum "rol_usuario" {
+  "visitante"      [note: 'Por defecto al registrarse. Compra, favoritos, mis compras.']
+  "vendedor"       [note: 'Visitante + gestión de pedidos, productos y reporte de ventas, SIN costos ni utilidad.']
+  "administrador"  [note: 'Vendedor + costos y utilidad + gestor de usuarios y permisos.']
+}
+
+Enum "estado_pedido" {
+  "pendiente"
+  "confirmado"
+  "enviado"
+  "entregado"
+  "cancelado"   [note: 'No cuenta en reportes de ventas.']
+}
+
+// Estado de un intento de cobro. Se mapea desde la respuesta de la pasarela
+// (ePayco x_cod_response: 1 aprobado, 2 rechazado, 3 pendiente, 4 fallido).
+Enum "estado_pago" {
+  "pendiente"
+  "aprobado"
+  "rechazado"
+  "fallido"
+  "reversado"
+}
+
+// -----------------------------------------------------------------------------
+// CATÁLOGO (mismo origen que el seed del Next)
+// -----------------------------------------------------------------------------
+
+Table "marcas" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "nombre" VARCHAR(100) [unique, not null, note: 'marcas_nombre_key']
+  "logo_url" VARCHAR(2048)
+  "pais_origen" VARCHAR(100) [not null]
+  "created_at" TIMESTAMPTZ [not null, default: `now()`]
+}
+
+// "Producto" en el Excel = celular. Columnas nuevas frente al Next:
+// descripcion (vista de detalle), costo (solo administrador) y descuento_pct
+// (promociones de la Home y descuentos del checkout).
+Table "celulares" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "marca_id" UUID [not null]
+  "modelo" VARCHAR(150) [not null]
+  "descripcion" TEXT
+  "images_urls" TEXT [note: 'CSV de URLs, igual que en el Next; la API lo expone como images_url[]']
+  "precio" DECIMAL(10,2) [not null, note: 'chk_celulares_precio: precio >= 0']
+  "costo" DECIMAL(10,2) [not null, default: 0, note: 'chk_celulares_costo: costo >= 0. Nunca sale de la API salvo a administrador.']
+  "descuento_pct" SMALLINT [not null, default: 0, note: 'chk_celulares_descuento: 0..90. > 0 = en promoción']
+  "fecha_lanzamiento" DATE [not null]
+  "created_at" TIMESTAMPTZ [not null, default: `now()`]
+
+  Indexes {
+    fecha_lanzamiento [name: 'idx_celulares_fecha']
+    marca_id [name: 'idx_celulares_marca']
+  }
+}
+
+// 1:1 opcional con celulares; la FK vive aquí (igual que en el Next).
+Table "especificaciones" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "celular_id" UUID [unique, not null, note: 'especificaciones_celular_id_key']
+  "procesador" VARCHAR(100) [not null]
+  "ram" VARCHAR(50) [not null]
+  "almacenamiento" VARCHAR(50) [not null]
+  "pantalla" VARCHAR(100) [not null]
+  "camara" VARCHAR(150) [not null]
+  "bateria" VARCHAR(50) [not null]
+  "sistema_op" VARCHAR(100) [not null]
+  "created_at" TIMESTAMPTZ [not null, default: `now()`]
+}
+
+// Valoraciones del seed. Solo lectura en esta versión (el Excel no las pide).
+Table "comentarios" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "celular_id" UUID [not null]
+  "nombre" VARCHAR(100) [not null]
+  "mensaje" TEXT [not null]
+  "calificacion" SMALLINT [not null, note: 'CHECK 1..5']
+  "fecha" TIMESTAMPTZ [not null, default: `now()`]
+
+  Indexes {
+    celular_id [name: 'idx_comentarios_celular']
+  }
+}
+
+// -----------------------------------------------------------------------------
+// USUARIOS, SESIÓN Y SEGURIDAD
+// -----------------------------------------------------------------------------
+
+// Login por email (la recuperación de contraseña va por correo).
+// A diferencia del Next, el registro nace ACTIVO con rol visitante: el Excel
+// pide que registrarse dé acceso de comprador. is_active sirve para que el
+// administrador bloquee a alguien sin borrar su historial de pedidos.
+Table "usuarios" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "email" VARCHAR(254) [unique, not null, note: 'usuarios_email_key. Se guarda en minúsculas (chk_usuarios_email_minusculas)']
+  "nombre" VARCHAR(100) [not null]
+  "documento" VARCHAR(20) [note: 'Opcional; lo pide el checkout. CHECK ^[0-9]{6,20}$']
+  "telefono" VARCHAR(20)
+  "password_hash" VARCHAR(255) [not null, note: 'scrypt:N:r:p:sal:hash, mismo formato que el Next']
+  "rol" rol_usuario [not null, default: 'visitante']
+  "is_active" BOOLEAN [not null, default: true]
+  "created_at" TIMESTAMPTZ [not null, default: `now()`]
+  "updated_at" TIMESTAMPTZ [not null, default: `now()`]
+}
+
+// Biometría por huella, OBLIGATORIA en el registro (Excel, fila 17).
+// En el teléfono, el Android Keystore genera un par de claves EC P-256 que
+// solo se desbloquea con la huella; la API guarda la clave PÚBLICA. Entrar con
+// huella = firmar un reto del servidor con la privada -> la API verifica la
+// firma con esta clave. Ningún dato biométrico sale del teléfono.
+// Un usuario puede tener varias (un registro por teléfono).
+Table "credenciales_biometricas" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "usuario_id" UUID [not null]
+  "dispositivo" VARCHAR(100) [not null, note: 'Nombre legible: "Pixel 8 de Ana"']
+  "public_key" TEXT [not null, note: 'SPKI DER en base64 (PublicKey.getEncoded() de Android)']
+  "created_at" TIMESTAMPTZ [not null, default: `now()`]
+  "last_used_at" TIMESTAMPTZ
+
+  Indexes {
+    usuario_id [name: 'idx_credenciales_usuario']
+  }
+}
+
+// Recuperación de contraseña por email con CÓDIGO de 6 dígitos (no enlace:
+// un enlace exigiría deep links en la app). Se guarda solo el hash del código;
+// caduca a los 15 min, admite 5 intentos y un único uso.
+Table "recuperaciones_password" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "usuario_id" UUID [not null]
+  "codigo_hash" VARCHAR(255) [not null]
+  "intentos" SMALLINT [not null, default: 0]
+  "expires_at" TIMESTAMPTZ [not null]
+  "usado_at" TIMESTAMPTZ
+  "created_at" TIMESTAMPTZ [not null, default: `now()`]
+}
+
+// -----------------------------------------------------------------------------
+// PERFIL DEL COMPRADOR ("Más": mis compras, favoritos, direcciones)
+// -----------------------------------------------------------------------------
+
+Table "favoritos" {
+  "usuario_id" UUID [not null]
+  "celular_id" UUID [not null]
+  "created_at" TIMESTAMPTZ [not null, default: `now()`]
+
+  Indexes {
+    (usuario_id, celular_id) [pk]
+  }
+}
+
+Table "direcciones" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "usuario_id" UUID [not null]
+  "alias" VARCHAR(50) [not null, note: 'Casa, Oficina…']
+  "direccion" VARCHAR(200) [not null]
+  "ciudad" VARCHAR(100) [not null]
+  "departamento" VARCHAR(100) [not null]
+  "indicaciones" VARCHAR(300)
+  "telefono" VARCHAR(20) [not null]
+  "created_at" TIMESTAMPTZ [not null, default: `now()`]
+}
+
+// -----------------------------------------------------------------------------
+// VENTAS Y PAGOS
+// -----------------------------------------------------------------------------
+// Los datos de tarjeta NUNCA pasan por esta API: el cobro lo hace una pasarela
+// de terceros (hoy ePayco), que es quien recibe y tokeniza la tarjeta.
+
+// Catálogo de métodos de pago que ofrece la pasarela de la app. Cambiar de
+// pasarela o sumar una alternativa (Wompi, PSE directo, Nequi…) es insertar o
+// desactivar filas, no migrar el esquema.
+// Las CLAVES PRIVADAS de cada proveedor van en variables de entorno, nunca
+// aquí: `config` solo guarda parámetros públicos que la app necesita para
+// abrir el checkout (p. ej. la public key de ePayco o el modo test).
+Table "metodos_pago" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "codigo" VARCHAR(50) [unique, not null, note: 'metodos_pago_codigo_key. Slug estable que usa el código: contraentrega | epayco']
+  "nombre" VARCHAR(100) [not null, note: 'Lo que ve el comprador: "Pago contraentrega", "Tarjeta, PSE o efectivo (ePayco)"']
+  "descripcion" VARCHAR(300)
+  "proveedor" VARCHAR(50) [note: 'NULL = sin pasarela (contraentrega). epayco | wompi | …']
+  "requiere_pasarela" BOOLEAN [not null, default: false, note: 'true = el pedido queda pendiente de pago hasta que la pasarela confirme']
+  "config" JSONB [not null, default: `'{}'`, note: 'Solo parámetros PÚBLICOS. Sin secretos.']
+  "is_active" BOOLEAN [not null, default: true, note: 'Desactivar = deja de ofrecerse; los pedidos viejos lo conservan']
+  "orden" SMALLINT [not null, default: 0, note: 'Orden en la pasarela de la app']
+  "created_at" TIMESTAMPTZ [not null, default: `now()`]
+}
+// El CARRITO no está en la BD: vive en el teléfono (DataStore), porque un visitante
+// sin sesión también compra hasta llegar a la pasarela. Al "pagar y finalizar"
+// la app manda los ítems y la API recalcula precios, descuentos y costos desde
+// `celulares` (nunca se fía de los importes del cliente).
+
+// Snapshot de comprador y dirección: el pedido conserva lo que se vendió y a
+// quién aunque luego se edite o borre el usuario, la dirección o el producto.
+Table "pedidos" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "numero" INTEGER [unique, not null, increment, note: 'Número legible: #1042']
+  "usuario_id" UUID [note: 'NULL si se borró el usuario (ON DELETE SET NULL)']
+  "cliente_nombre" VARCHAR(100) [not null]
+  "cliente_email" VARCHAR(254) [not null]
+  "cliente_documento" VARCHAR(20)
+  "cliente_telefono" VARCHAR(20) [not null]
+  "direccion_entrega" VARCHAR(200) [not null]
+  "ciudad_entrega" VARCHAR(100) [not null]
+  "departamento_entrega" VARCHAR(100) [not null]
+  "indicaciones_entrega" VARCHAR(300)
+  "metodo_pago_id" UUID [not null, note: 'ON DELETE RESTRICT: un método con pedidos se desactiva, no se borra']
+  "estado" estado_pedido [not null, default: 'pendiente', note: 'Logística. Con pasarela, pasa a confirmado cuando un pago queda aprobado']
+  "pagado_at" TIMESTAMPTZ [note: 'Momento del pago aprobado; NULL en contraentrega hasta la entrega']
+  "subtotal" DECIMAL(12,2) [not null, note: 'Σ precio × cantidad']
+  "descuento" DECIMAL(12,2) [not null, default: 0]
+  "total" DECIMAL(12,2) [not null, note: 'subtotal - descuento']
+  "costo_total" DECIMAL(12,2) [not null, note: 'Σ costo × cantidad. Utilidad = total - costo_total']
+  "created_at" TIMESTAMPTZ [not null, default: `now()`, note: 'Fecha del pedido']
+  "updated_at" TIMESTAMPTZ [not null, default: `now()`]
+
+  Indexes {
+    created_at [name: 'idx_pedidos_fecha']
+    usuario_id [name: 'idx_pedidos_usuario']
+  }
+}
+
+// Precio, descuento y costo se copian del celular AL COMPRAR: los reportes no
+// cambian si mañana se edita el precio.
+Table "pedido_items" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "pedido_id" UUID [not null]
+  "celular_id" UUID [note: 'NULL si se borró el producto']
+  "modelo" VARCHAR(150) [not null, note: 'Snapshot: "Apple iPhone 15"']
+  "imagen_url" VARCHAR(2048)
+  "cantidad" INTEGER [not null, note: 'CHECK > 0']
+  "precio_unitario" DECIMAL(10,2) [not null]
+  "descuento_unitario" DECIMAL(10,2) [not null, default: 0]
+  "costo_unitario" DECIMAL(10,2) [not null]
+
+  Indexes {
+    pedido_id [name: 'idx_items_pedido']
+    celular_id [name: 'idx_items_celular']
+  }
+}
+
+// Intentos de cobro en la pasarela. Un pedido puede tener varios (tarjeta
+// rechazada y reintento); como mucho uno aprobado. La fila la crea la API al
+// abrir el checkout y la actualiza la confirmación servidor-a-servidor de la
+// pasarela (en ePayco, la URL de confirmación), validando su firma. La app
+// nunca marca un pago como aprobado: solo consulta el estado.
+Table "pagos" {
+  "id" UUID [pk, default: `gen_random_uuid()`]
+  "pedido_id" UUID [not null]
+  "metodo_pago_id" UUID [not null]
+  "referencia" VARCHAR(100) [unique, not null, note: 'pagos_referencia_key. La nuestra, enviada a la pasarela (ePayco: invoice)']
+  "referencia_pasarela" VARCHAR(100) [note: 'La de la pasarela (ePayco: x_ref_payco). Se rellena en la confirmación']
+  "estado" estado_pago [not null, default: 'pendiente']
+  "monto" DECIMAL(12,2) [not null, note: 'Debe coincidir con pedidos.total: la confirmación con otro monto se rechaza']
+  "moneda" CHAR(3) [not null, default: 'COP']
+  "medio" VARCHAR(50) [note: 'Lo que usó el comprador según la pasarela: tarjeta, PSE, efectivo…']
+  "respuesta" JSONB [note: 'Payload crudo de la confirmación, para auditoría y conciliación']
+  "created_at" TIMESTAMPTZ [not null, default: `now()`]
+  "updated_at" TIMESTAMPTZ [not null, default: `now()`]
+
+  Indexes {
+    pedido_id [name: 'idx_pagos_pedido']
+  }
+}
+
+// =============================================================================
+// RELACIONES
+// =============================================================================
+
+Ref "fk_celulares_marcas": "marcas"."id" < "celulares"."marca_id" [update: cascade, delete: restrict]
+Ref "fk_especificaciones_celulares": "celulares"."id" - "especificaciones"."celular_id" [update: cascade, delete: cascade]
+Ref "fk_comentarios_celulares": "celulares"."id" < "comentarios"."celular_id" [update: cascade, delete: cascade]
+
+Ref "fk_credenciales_usuarios": "usuarios"."id" < "credenciales_biometricas"."usuario_id" [delete: cascade]
+Ref "fk_recuperaciones_usuarios": "usuarios"."id" < "recuperaciones_password"."usuario_id" [delete: cascade]
+
+Ref "fk_favoritos_usuarios": "usuarios"."id" < "favoritos"."usuario_id" [delete: cascade]
+Ref "fk_favoritos_celulares": "celulares"."id" < "favoritos"."celular_id" [delete: cascade]
+Ref "fk_direcciones_usuarios": "usuarios"."id" < "direcciones"."usuario_id" [delete: cascade]
+// Un pedido sobrevive a su usuario y a sus productos (snapshot).
+Ref "fk_pedidos_usuarios": "usuarios"."id" < "pedidos"."usuario_id" [delete: set null]
+Ref "fk_pedidos_metodos_pago": "metodos_pago"."id" < "pedidos"."metodo_pago_id" [delete: restrict]
+Ref "fk_items_pedidos": "pedidos"."id" < "pedido_items"."pedido_id" [delete: cascade]
+Ref "fk_items_celulares": "celulares"."id" < "pedido_items"."celular_id" [delete: set null]
+
+Ref "fk_pagos_pedidos": "pedidos"."id" < "pagos"."pedido_id" [delete: cascade]
+Ref "fk_pagos_metodos_pago": "metodos_pago"."id" < "pagos"."metodo_pago_id" [delete: restrict]

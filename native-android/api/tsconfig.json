@@ -1,0 +1,25 @@
+{
+  // Node ejecuta los .ts directamente (type stripping): por eso solo se admite
+  // sintaxis borrable (erasableSyntaxOnly: nada de enum, namespace ni
+  // parameter properties) y los imports llevan extensión .ts. `tsc` compila a
+  // dist/ reescribiendo esas extensiones a .js.
+  "compilerOptions": {
+    "target": "es2024",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["es2024"],
+    "types": ["node"],
+    "rootDir": ".",
+    "outDir": "dist",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "skipLibCheck": true,
+    "sourceMap": true
+  },
+  "include": ["src/**/*.ts", "db/**/*.ts", "scripts/**/*.ts"]
+}
