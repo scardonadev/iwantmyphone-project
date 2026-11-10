@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Solo en debug: HTTP en claro permitido, para la API local
+  (localhost con `adb reverse`, o la IP LAN del PC). El release no lo admite.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

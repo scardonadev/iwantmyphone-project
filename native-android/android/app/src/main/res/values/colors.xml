@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mismos tokens que app/globals.css del Next. -->
+    <color name="paper">#FFFFFF</color>
+    <color name="ink">#111111</color>
+    <color name="logo_red">#A52B34</color>
+</resources>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tema base: la UI la dibuja Compose; aquí solo se fijan las barras del sistema en claro. -->
+    <style name="Theme.Iwmp" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/paper</item>
+        <item name="android:statusBarColor">@color/paper</item>
+        <item name="android:navigationBarColor">@color/paper</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+
+    <!--
+      Splash del sistema (obligatorio desde Android 12): fondo blanco y sin icono,
+      para que encadene sin salto con el splash animado de Compose (SplashScreen.kt),
+      que es el que dibuja el corazón.
+    -->
+    <style name="Theme.Iwmp.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/paper</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_vacio</item>
+        <item name="postSplashScreenTheme">@style/Theme.Iwmp</item>
+    </style>
+</resources>
